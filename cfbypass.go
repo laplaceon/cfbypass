@@ -1,9 +1,11 @@
 package cfbypass
 
 import (
+	"context"
 	"fmt"
 	"github.com/robertkrimen/otto"
 	"io/ioutil"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -14,7 +16,7 @@ import (
 )
 
 var (
-	client *http.Client
+	client = &http.Client{}
 	vm = otto.New()
 )
 
@@ -34,8 +36,8 @@ func copyHeader(header http.Header) http.Header {
 	return m
 }
 
-func GetCurlString(url string, ua string) string {
-	cookies := GetTokens(url, ua)
+func GetCurlString(url string, ua string, ipFamily string) string {
+	cookies := GetTokens(url, ua, ipFamily)
 	
 	if cookies != nil {
 		cookiesString := ""
@@ -44,25 +46,67 @@ func GetCurlString(url string, ua string) string {
 			cookie := cookies[i]
 			cookiesString += cookie.Name + "=" + cookie.Value + "; "
 		}
-		return fmt.Sprintf(`curl %s -b "%s" -A "%s"`, url, cookiesString, ua)
+		curlString := fmt.Sprintf(`curl %s -b "%s" -A "%s"`, url, cookiesString, ua)
+		if ipFamily == "4" {
+			curlString += " -4"
+		}
+		if ipFamily == "6" {
+			curlString += " -6"
+		}
+		return curlString
 	}
 	
 	return ""
 }
 
-func GetTokens(url string, ua string) []*http.Cookie {
+func GetTokens(url string, ua string, ipFamily string) []*http.Cookie {
 	jar, _ := cookiejar.New(nil)
-	client = &http.Client{Jar: jar,}
+	client.Jar = jar
+	
+	switch ipFamily {
+		case "6":
+			ipv6Transport := &http.Transport{
+				Proxy: http.ProxyFromEnvironment,
+				MaxIdleConns: 100,
+				IdleConnTimeout: 90 * time.Second,
+				TLSHandshakeTimeout: 10 * time.Second,
+				ExpectContinueTimeout: 1 * time.Second,
+			}
+			ipv6Transport.DialContext = func(ctx context.Context, _, addr string) (net.Conn, error) {
+				return (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext(ctx, "tcp6", addr)
+			}
+			client.Transport = ipv6Transport
+			fmt.Println("Forcing ipv6")
+		case "4":
+			ipv4Transport := &http.Transport{
+				Proxy: http.ProxyFromEnvironment,
+				MaxIdleConns: 100,
+				IdleConnTimeout: 90 * time.Second,
+				TLSHandshakeTimeout: 10 * time.Second,
+				ExpectContinueTimeout: 1 * time.Second,
+			}
+			ipv4Transport.DialContext = func(ctx context.Context, _, addr string) (net.Conn, error) {
+				return (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext(ctx, "tcp4", addr)
+			}
+			client.Transport = ipv4Transport
+			fmt.Println("Forcing ipv4")
+		case "":
+		default:
+			fmt.Println("Unknown ip family entered. Using default.")
+	}
+	
 	req, _ := http.NewRequest("GET", url, nil)
 	req.Header.Set("User-Agent", ua)
 
 	res, resErr := client.Do(req)
 	if resErr != nil {
-		panic(resErr)
+		fmt.Println("There was an error getting a response")
+		return nil
 	}
+	
 	defer res.Body.Close()
 	
-	if IsRestricted(res) {
+	if isRestricted(res) {
 		return bypass(req, res)
 	}
 	
@@ -143,8 +187,14 @@ func extractJavascript(body []byte) string {
 	return js
 }
 
-func IsRestricted(r *http.Response) bool {
-	if r.StatusCode == 503 {
+func IsRestricted(url string) bool {
+	req, _ := http.NewRequest("GET", url, nil)
+	res, _ := client.Do(req)
+	return isRestricted(res)
+}
+
+func isRestricted(r *http.Response) bool {
+	if r.StatusCode == 503 && r.Header.Get("Server") == "cloudflare-nginx" {
 		return true
 	}
 	return false
