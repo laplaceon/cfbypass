@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
-	"strconv"
 	"time"
 )
 
@@ -115,11 +114,9 @@ func GetTokens(url string, ua string, ipFamily string) []*http.Cookie {
 
 func bypass(req *http.Request, r *http.Response) []*http.Cookie {
 	body, _ := ioutil.ReadAll(r.Body)
-	time.Sleep(5 * time.Second)
-	js := extractJavascript(body)
+	time.Sleep(8 * time.Second)
+	js := extractJavascript(body, req.URL.Host)
 	answer := strings.TrimSpace(parseChallenge(js))
-	
-	resultI, _ := strconv.Atoi(answer)
 
 	vc, _ := regexp.Compile(`name="jschl_vc" value="(\w+)"`)
 	pass, _ := regexp.Compile(`name="pass" value="(.+?)"`)
@@ -135,17 +132,19 @@ func bypass(req *http.Request, r *http.Response) []*http.Cookie {
 	
 	query := url.Query()
 	query.Set("jschl_vc", string(vcMatch[1]))
-	query.Set("jschl_answer", fmt.Sprintf("%d", resultI + len(req.URL.Host)))
 	query.Set("pass", string(passMatch[1]))
+	query.Set("jschl_answer", answer)
 	url.RawQuery = query.Encode()
+	
 	
 	nReq, err := http.NewRequest("GET", url.String(), nil)
 	if err != nil {
 		panic(err)
 	}
 
-	nReq.Header = copyHeader(req.Header)
+	nReq.Header = copyHeader(r.Header)
 	nReq.Header.Set("Referer", req.URL.String())
+	nReq.Header.Set("User-Agent", req.Header.Get("User-Agent"))
 	
 	_, resErr := client.Do(nReq)
 	if resErr != nil {
@@ -162,9 +161,9 @@ func parseChallenge(js string) string {
 	return result.String()
 }
 
-func extractJavascript(body []byte) string {
+func extractJavascript(body []byte, domain string) string {
 	r1, _ := regexp.Compile(`setTimeout\(function\(\){\s+(var s,t,o,p,b,r,e,a,k,i,n,g,f.+?\r?\n[\s\S]+?a\.value =.+?)\r?\n`)
-	r2, _ := regexp.Compile(`a\.value = (parseInt\(.+?\)) \+ .+?;`)
+	r2, _ := regexp.Compile(`a\.value = (.+ \+ t\.length)`)
 	r3, _ := regexp.Compile(`\s{3,}[a-z](?: = |\.).+`)
 	r4, _ := regexp.Compile(`[\n\\']`)
 	
@@ -177,6 +176,9 @@ func extractJavascript(body []byte) string {
 	js := string(r1Match[1])
 	js = r2.ReplaceAllString(js, "$1")
 	js = r3.ReplaceAllString(js, "")
+	
+	js = strings.Replace(js, "t.length", fmt.Sprintf("%d", len(domain)), -1)
+	
 	js = r4.ReplaceAllString(js, "")
 	
 	lastSemicolon := strings.LastIndex(js, ";")
@@ -194,7 +196,7 @@ func IsRestricted(url string) bool {
 }
 
 func isRestricted(r *http.Response) bool {
-	if r.StatusCode == 503 && r.Header.Get("Server") == "cloudflare-nginx" {
+	if r.StatusCode == 503 && strings.Contains(r.Header.Get("Server"), "cloudflare") {
 		return true
 	}
 	return false
