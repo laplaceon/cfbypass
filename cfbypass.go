@@ -13,12 +13,29 @@ import (
 	"strings"
 	"time"
 )
-
+const (
+	pList    = "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt"
+	defaultP = ""
+)
 var (
 	client = &http.Client{}
 	vm = otto.New()
 )
+func randomp() string {
+	// Retrieve the bytes of the user-agent list
+	pxlist, err := httpclient.GetString(pList)
+	if err != nil {
+		return defaultP
+	}
 
+	// Split all user-agents into a slice and return a
+	// single random one
+	ua := strings.Split(pxlist, "\n")
+	if len(ua) == 0 {
+		return defaultP
+	}
+	return ua[rand.Intn(len(ua))]
+}
 func copyStrSlice(in []string) []string {
 	r := make([]string, 0, len(in))
 	r = append(r, in...)
@@ -35,7 +52,7 @@ func copyHeader(header http.Header) http.Header {
 	return m
 }
 
-func GetCurlString(url string, ua string, ipFamily string) string {
+func GetString(url string, ua string, ipFamily string) string {
 	cookies := GetTokens(url, ua, ipFamily)
 	
 	if cookies != nil {
@@ -65,7 +82,7 @@ func GetTokens(url string, ua string, ipFamily string) []*http.Cookie {
 	switch ipFamily {
 		case "6":
 			ipv6Transport := &http.Transport{
-				Proxy: http.ProxyFromEnvironment,
+				Proxy: http.ProxyURL(randomUA()),
 				MaxIdleConns: 100,
 				IdleConnTimeout: 90 * time.Second,
 				TLSHandshakeTimeout: 10 * time.Second,
@@ -78,7 +95,7 @@ func GetTokens(url string, ua string, ipFamily string) []*http.Cookie {
 			fmt.Println("Forcing ipv6")
 		case "4":
 			ipv4Transport := &http.Transport{
-				Proxy: http.ProxyFromEnvironment,
+				Proxy: http.ProxyURL(randomUA()),
 				MaxIdleConns: 100,
 				IdleConnTimeout: 90 * time.Second,
 				TLSHandshakeTimeout: 10 * time.Second,
